@@ -102,20 +102,27 @@ async function send(prompt) {
                     } else if (data.type === 'question') {
                         // Agent needs more information - display as a question
                         status.className = 'status done';
-                        status.innerHTML = 'Need more info';
+                        status.innerHTML = '❓ Need info';
                         response.innerHTML = formatMarkdown('🤔 ' + data.content);
+                        text = ''; // Mark that we showed a question, not text
                     } else if (data.type === 'done') {
-                        status.className = 'status done';
-                        status.innerHTML = 'Complete';
-                        response.innerHTML = formatMarkdown(text);
+                        // Only mark as complete if we had text content
+                        if (text) {
+                            status.className = 'status done';
+                            status.innerHTML = 'Complete';
+                            response.innerHTML = formatMarkdown(text);
+                        }
                     }
                     scroll();
                 } catch (e) {}
             }
         }
         
-        status.className = 'status done';
-        status.innerHTML = 'Complete';
+        // Only show "Complete" at end if we had actual text response
+        if (text) {
+            status.className = 'status done';
+            status.innerHTML = 'Complete';
+        }
         
     } catch (e) {
         status.className = 'status error';
