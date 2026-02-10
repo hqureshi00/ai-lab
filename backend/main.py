@@ -6,9 +6,16 @@ from dotenv import load_dotenv
 import asyncio
 import json
 import os
+import sys
 import httpx
 
+# Add backend to path for imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 load_dotenv()
+
+# Create storage directory
+os.makedirs(os.path.join(os.path.dirname(__file__), "storage"), exist_ok=True)
 
 app = FastAPI()
 
@@ -25,9 +32,11 @@ GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 REDIRECT_URI = "http://localhost:8000/auth/callback"
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/calendar.readonly"
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/calendar",
 ]
-TOKENS_FILE = "tokens.json"
+TOKENS_FILE = os.path.join(os.path.dirname(__file__), "storage", "tokens.json")
+SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "storage", "settings.json")
 
 
 def load_tokens():
@@ -120,33 +129,48 @@ async def auth_status():
     return {"connected": connected, "gmail": connected, "calendar": connected}
 
 
+def load_settings():
+    if os.path.exists(SETTINGS_FILE):
+        with open(SETTINGS_FILE) as f:
+            return json.load(f)
+    return {"school_name": "", "teacher_names": []}
+
+
+def save_settings(settings):
+    with open(SETTINGS_FILE, "w") as f:
+        json.dump(settings, f)
+
+
+@app.get("/settings")
+async def get_settings():
+    """Get user settings."""
+    return load_settings()
+
+
+class SettingsRequest(BaseModel):
+    school_name: str
+    teacher_names: list[str] = []
+
+
+@app.post("/settings")
+async def update_settings(request: SettingsRequest):
+    """Update user settings."""
+    settings = {
+        "school_name": request.school_name,
+        "teacher_names": request.teacher_names
+    }
+    save_settings(settings)
+    return {"success": True, "settings": settings}
+
+
 async def generate_response(prompt: str):
-    """Simulate agentic AI with status updates."""
+    """Process request using AI Agent."""
+    from agent.orchestrator import Agent
     
-    # Step 1: Thinking
-    yield event("status", "Analyzing your request...")
-    await asyncio.sleep(0.8)
+    agent = Agent()
     
-    # Step 2: Searching
-    yield event("status", "Searching knowledge base...")
-    await asyncio.sleep(1.0)
-    
-    # Step 3: Processing
-    yield event("status", "Processing information...")
-    await asyncio.sleep(0.6)
-    
-    # Step 4: Generating response
-    yield event("status", "Generating response...")
-    await asyncio.sleep(0.4)
-    
-    # Stream the actual response
-    response = f"Based on your question about '{prompt[:30]}{'...' if len(prompt) > 30 else ''}', here's what I found: This is a simulated response demonstrating real-time streaming updates."
-    
-    for word in response.split():
-        yield event("text", word + " ")
-        await asyncio.sleep(0.05)
-    
-    yield event("done", "")
+    async for event_data in agent.process(prompt):
+        yield event("status" if event_data["type"] == "status" else event_data["type"], event_data["content"])
 
 
 @app.post("/chat")

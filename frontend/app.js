@@ -24,6 +24,28 @@ function scroll() {
     chat.scrollTop = chat.scrollHeight;
 }
 
+function formatMarkdown(text) {
+    // Escape HTML first
+    let html = text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    
+    // Bold: **text**
+    html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    
+    // Newlines to <br>
+    html = html.replace(/\n/g, '<br>');
+    
+    // Style bullet points
+    html = html.replace(/•/g, '<span style="color: #60a5fa;">•</span>');
+    
+    // Style warning emoji
+    html = html.replace(/⚠️/g, '<span style="color: #fbbf24;">⚠️</span>');
+    
+    return html;
+}
+
 async function send(prompt) {
     busy = true;
     btn.disabled = true;
@@ -76,10 +98,11 @@ async function send(prompt) {
                         status.innerHTML = `<div class="spinner"></div><span>${data.content}</span>`;
                     } else if (data.type === 'text') {
                         text += data.content;
-                        response.textContent = text;
+                        response.innerHTML = formatMarkdown(text);
                     } else if (data.type === 'done') {
                         status.className = 'status done';
                         status.innerHTML = 'Complete';
+                        response.innerHTML = formatMarkdown(text);
                     }
                     scroll();
                 } catch (e) {}
@@ -136,4 +159,47 @@ async function checkConnection() {
     } catch (e) {}
 }
 
+async function loadSettings() {
+    try {
+        const res = await fetch(`${API}/settings`);
+        const data = await res.json();
+        if (data.school_name) {
+            document.getElementById('school-input').value = data.school_name;
+        }
+        if (data.teacher_names && data.teacher_names.length > 0) {
+            document.getElementById('teachers-input').value = data.teacher_names.join(', ');
+        }
+        if (data.school_name || (data.teacher_names && data.teacher_names.length > 0)) {
+            const status = document.getElementById('school-status');
+            status.className = 'card-status connected';
+            const teacherCount = data.teacher_names?.length || 0;
+            status.innerHTML = `<span class="dot"></span> ${data.school_name || 'No school'}${teacherCount ? ` • ${teacherCount} teacher(s)` : ''}`;
+        }
+    } catch (e) {}
+}
+
+async function saveSettings() {
+    const schoolName = document.getElementById('school-input').value.trim();
+    const teachersInput = document.getElementById('teachers-input').value.trim();
+    const teacherNames = teachersInput ? teachersInput.split(',').map(t => t.trim()).filter(t => t) : [];
+    
+    try {
+        const res = await fetch(`${API}/settings`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ school_name: schoolName, teacher_names: teacherNames })
+        });
+        const data = await res.json();
+        if (data.success) {
+            const status = document.getElementById('school-status');
+            status.className = 'card-status connected';
+            const teacherCount = teacherNames.length;
+            status.innerHTML = `<span class="dot"></span> ${schoolName || 'No school'}${teacherCount ? ` • ${teacherCount} teacher(s)` : ''}`;
+        }
+    } catch (e) {
+        console.error('Failed to save settings', e);
+    }
+}
+
 checkConnection();
+loadSettings();
