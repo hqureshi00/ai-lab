@@ -1,0 +1,12 @@
+# Tokens (sensitive)
+tokens.json
+
+# Environment variables
+.env
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
