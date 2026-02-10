@@ -98,6 +98,53 @@ class Agent:
                 yield {"type": "done", "content": ""}
                 return
         
+        elif intent == "calendar_add":
+            yield {"type": "status", "content": "Parsing event details..."}
+            try:
+                event_details = await self._extract_event_details(prompt)
+                if not event_details:
+                    yield {"type": "text", "content": "❌ Couldn't parse event details. Please try again with a clearer description like:\n- 'Add dentist appointment tomorrow at 2pm'\n- 'Schedule team meeting on Friday at 10am'"}
+                    yield {"type": "done", "content": ""}
+                    return
+                
+                # Build ISO datetime strings
+                start_dt = f"{event_details['date']}T{event_details['start_time']}:00"
+                end_dt = f"{event_details['date']}T{event_details['end_time']}:00"
+                
+                yield {"type": "status", "content": f"Creating event: {event_details['title']}..."}
+                
+                result = await self.calendar.create_event(
+                    title=event_details['title'],
+                    start=start_dt,
+                    end=end_dt,
+                    description=event_details.get('description', ''),
+                    location=event_details.get('location', '')
+                )
+                
+                if result.get('id'):
+                    from datetime import datetime
+                    start_time = datetime.fromisoformat(event_details['date'] + 'T' + event_details['start_time'])
+                    formatted_date = start_time.strftime('%a %b %d, %Y')
+                    formatted_time = start_time.strftime('%I:%M %p')
+                    
+                    yield {"type": "text", "content": f"""✅ **Event Created!**
+
+📅 **{event_details['title']}**
+
+• **When:** {formatted_date} at {formatted_time}
+• **Location:** {event_details.get('location', 'Not specified') or 'Not specified'}"""}
+                    yield {"type": "done", "content": ""}
+                    return
+                else:
+                    yield {"type": "text", "content": f"❌ Failed to create event: {result.get('error', {}).get('message', 'Unknown error')}"}
+                    yield {"type": "done", "content": ""}
+                    return
+                
+            except Exception as e:
+                yield {"type": "text", "content": f"❌ Error creating event: {str(e)}"}
+                yield {"type": "done", "content": ""}
+                return
+        
         else:
             # General - search both, but extract topic keywords first
             yield {"type": "status", "content": "Searching emails and calendar..."}
@@ -163,6 +210,17 @@ FORMATTING:
         """Classify user intent."""
         prompt_lower = prompt.lower()
         
+        # Patterns for calendar add - check these FIRST (more specific)
+        calendar_add_patterns = [
+            "add to calendar", "add to my calendar", "create event", "create meeting",
+            "schedule a", "schedule an", "put on calendar", "put on my calendar",
+            "add event", "new event", "book a", "set a reminder", "remind me"
+        ]
+        
+        # Check for calendar add intent first
+        if any(pattern in prompt_lower for pattern in calendar_add_patterns):
+            return "calendar_add"
+        
         # Patterns that indicate email search
         email_patterns = [
             "email", "inbox", "ptsa", "pta", "newsletter", "message", 
@@ -174,17 +232,63 @@ FORMATTING:
             "rsvp", "cost", "price", "deadline", "what was", "what did",
             "show me", "find", "search"
         ]
-        calendar_words = ["calendar", "schedule", "busy", "free", "meeting", "appointment"]
+        calendar_read_words = ["calendar", "schedule", "busy", "free", "meeting", "appointment", "what's on"]
         
         # Follow-up questions or email queries
         if any(word in prompt_lower for word in question_words):
             return "email_search"
         if any(word in prompt_lower for word in email_patterns):
             return "email_search"
-        elif any(word in prompt_lower for word in calendar_words):
+        elif any(word in prompt_lower for word in calendar_read_words):
             return "calendar_read"
         
         return "general"
+    
+    async def _extract_event_details(self, prompt: str) -> dict:
+        """Use LLM to extract event details from natural language."""
+        from datetime import datetime, timedelta
+        import json
+        
+        today = datetime.now()
+        
+        extraction_prompt = f"""Extract calendar event details from the user's request. Today's date is {today.strftime('%A, %B %d, %Y')} and the current time is {today.strftime('%I:%M %p')}.
+
+User's request: "{prompt}"
+
+Return ONLY a JSON object with these fields:
+- title: string (event title/description)
+- date: string (YYYY-MM-DD format)
+- start_time: string (HH:MM in 24-hour format)
+- end_time: string (HH:MM in 24-hour format, default to 1 hour after start)
+- location: string (optional, empty string if not specified)
+- description: string (optional, empty string if not specified)
+
+Examples:
+- "tomorrow at 3pm" → date is {(today + timedelta(days=1)).strftime('%Y-%m-%d')}, start_time is "15:00"
+- "next Tuesday" → calculate the next Tuesday's date
+- "in 2 hours" → use today's date and calculate the time
+
+Return ONLY valid JSON, no other text."""
+
+        response = await self.llm.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a JSON extraction assistant. Output ONLY valid JSON."},
+                {"role": "user", "content": extraction_prompt}
+            ],
+            temperature=0
+        )
+        
+        try:
+            content = response.choices[0].message.content.strip()
+            # Remove markdown code blocks if present
+            if content.startswith("```"):
+                content = content.split("```")[1]
+                if content.startswith("json"):
+                    content = content[4:]
+            return json.loads(content)
+        except Exception as e:
+            return None
     
     def _extract_topic_keywords(self, prompt: str) -> list[str]:
         """Extract topic-specific keywords from user's question."""
