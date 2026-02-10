@@ -91,7 +91,22 @@ class Agent:
         elif intent == "calendar_read":
             yield {"type": "status", "content": "Checking your calendar..."}
             try:
-                events = await self.calendar.list_events(days_ahead=14)
+                # Determine time range from prompt
+                prompt_lower = prompt.lower()
+                if "today" in prompt_lower:
+                    days_ahead = 1
+                    include_past = True  # Show all events today, not just future ones
+                elif "tomorrow" in prompt_lower:
+                    days_ahead = 2
+                    include_past = False
+                elif "this week" in prompt_lower:
+                    days_ahead = 7
+                    include_past = True
+                else:
+                    days_ahead = 14
+                    include_past = True
+                    
+                events = await self.calendar.list_events(days_ahead=days_ahead, include_past_today=include_past)
                 context = self._format_events(events)
             except Exception as e:
                 yield {"type": "text", "content": f"❌ Error accessing Calendar: {str(e)}"}
@@ -161,10 +176,28 @@ class Agent:
         # Generate response
         yield {"type": "status", "content": "Generating response..."}
         
-        school_context = f"for {school}" if school else ""
-        teacher_context = f"Teachers: {', '.join(teachers)}" if teachers else ""
-        
-        full_prompt = f"""USER'S QUESTION: {prompt}
+        # Only include school context for email queries, not calendar
+        if intent == "calendar_read":
+            full_prompt = f"""USER'S QUESTION: {prompt}
+
+CALENDAR EVENTS:
+{context}
+
+INSTRUCTIONS:
+1. List the calendar events that match what the user is asking about
+2. If they ask about "today", show only today's events
+3. If they ask about "this week", show events for this week
+4. If no events found, say "You have no calendar events for [time period]"
+
+FORMAT EACH EVENT:
+📅 **Event Title**
+• When: Day, Date at Time
+• Location: (if available)"""
+        else:
+            school_context = f"for {school}" if school else ""
+            teacher_context = f"Teachers: {', '.join(teachers)}" if teachers else ""
+            
+            full_prompt = f"""USER'S QUESTION: {prompt}
 
 School: {school_context}
 {teacher_context}
@@ -221,6 +254,10 @@ FORMATTING:
         if any(pattern in prompt_lower for pattern in calendar_add_patterns):
             return "calendar_add"
         
+        # Also check if starts with "add" followed by event-like content
+        if prompt_lower.startswith("add ") and any(time_word in prompt_lower for time_word in ["at", "pm", "am", "today", "tomorrow", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]):
+            return "calendar_add"
+        
         # Patterns that indicate email search
         email_patterns = [
             "email", "inbox", "ptsa", "pta", "newsletter", "message", 
@@ -232,15 +269,17 @@ FORMATTING:
             "rsvp", "cost", "price", "deadline", "what was", "what did",
             "show me", "find", "search"
         ]
-        calendar_read_words = ["calendar", "schedule", "busy", "free", "meeting", "appointment", "what's on"]
+        calendar_read_words = ["calendar", "schedule", "busy", "free", "meeting", "appointment", "what's on", "today", "tomorrow", "this week"]
         
-        # Follow-up questions or email queries
+        # Check calendar FIRST (before email patterns)
+        if any(word in prompt_lower for word in calendar_read_words):
+            return "calendar_read"
+        
+        # Email patterns
         if any(word in prompt_lower for word in question_words):
             return "email_search"
         if any(word in prompt_lower for word in email_patterns):
             return "email_search"
-        elif any(word in prompt_lower for word in calendar_read_words):
-            return "calendar_read"
         
         return "general"
     
@@ -259,14 +298,16 @@ Return ONLY a JSON object with these fields:
 - title: string (event title/description)
 - date: string (YYYY-MM-DD format)
 - start_time: string (HH:MM in 24-hour format)
-- end_time: string (HH:MM in 24-hour format, default to 1 hour after start)
+- end_time: string (HH:MM in 24-hour format, default to 1 hour after start unless duration specified)
 - location: string (optional, empty string if not specified)
 - description: string (optional, empty string if not specified)
 
 Examples:
-- "tomorrow at 3pm" → date is {(today + timedelta(days=1)).strftime('%Y-%m-%d')}, start_time is "15:00"
+- "tomorrow at 3pm" → date is {(today + timedelta(days=1)).strftime('%Y-%m-%d')}, start_time is "15:00", end_time is "16:00"
 - "next Tuesday" → calculate the next Tuesday's date
 - "in 2 hours" → use today's date and calculate the time
+- "at 6pm for 3 hours" → start_time is "18:00", end_time is "21:00"
+- "sarah's visit at 6pm today for 3 hours" → title is "Sarah's visit", start_time is "18:00", end_time is "21:00"
 
 Return ONLY valid JSON, no other text."""
 

@@ -8,12 +8,16 @@ class CalendarTool:
         self.client = google_client
         self.base_url = "https://www.googleapis.com/calendar/v3"
     
-    async def list_events(self, days_ahead: int = 30) -> list[dict]:
+    async def list_events(self, days_ahead: int = 30, include_past_today: bool = False) -> list[dict]:
         """List upcoming calendar events."""
         headers = await self.client.get_headers()
         
         now = datetime.utcnow()
-        time_min = now.isoformat() + "Z"
+        if include_past_today:
+            # Start from beginning of today (midnight UTC)
+            time_min = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat() + "Z"
+        else:
+            time_min = now.isoformat() + "Z"
         time_max = (now + timedelta(days=days_ahead)).isoformat() + "Z"
         
         async with httpx.AsyncClient() as client:

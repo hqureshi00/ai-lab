@@ -12,7 +12,8 @@ import httpx
 # Add backend to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-load_dotenv()
+# Load .env from backend directory
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 # Create storage directory
 os.makedirs(os.path.join(os.path.dirname(__file__), "storage"), exist_ok=True)
@@ -165,7 +166,7 @@ async def update_settings(request: SettingsRequest):
 
 async def generate_response(prompt: str):
     """Process request using AI Agent."""
-    from agent.orchestrator import Agent
+    from agent.orchestrator_new import Agent
     
     agent = Agent()
     

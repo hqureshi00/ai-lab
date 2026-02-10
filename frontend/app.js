@@ -99,6 +99,11 @@ async function send(prompt) {
                     } else if (data.type === 'text') {
                         text += data.content;
                         response.innerHTML = formatMarkdown(text);
+                    } else if (data.type === 'question') {
+                        // Agent needs more information - display as a question
+                        status.className = 'status done';
+                        status.innerHTML = 'Need more info';
+                        response.innerHTML = formatMarkdown('🤔 ' + data.content);
                     } else if (data.type === 'done') {
                         status.className = 'status done';
                         status.innerHTML = 'Complete';
