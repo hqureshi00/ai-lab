@@ -469,7 +469,7 @@ gcloud compute backend-buckets create frontend-bucket --gcs-bucket-name=BUCKET_N
 ```
 
 
-### Security Checklist
+### Security Checklist (for prod)
 
 - [ ] OAuth tokens encrypted in Firestore (not plain text)
 - [ ] Secrets in Secret Manager (not environment variables in code)
