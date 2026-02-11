@@ -1,4 +1,4 @@
-# AI Assistant Demo
+# AI Assistant 
 
 Agentic AI assistant with Gmail/Calendar integration, real-time status updates, and conversation memory.
 
