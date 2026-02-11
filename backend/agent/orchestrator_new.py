@@ -414,6 +414,37 @@ class Agent:
                     data = result["data"]
                     formatted.append(f"  Email sent to: {data.get('to', 'recipient')}")
                     formatted.append(f"  Subject: {data.get('subject', 'No subject')}")
+                
+                elif result["type"] == "shopping_preferences_learned":
+                    data = result["data"]
+                    formatted.append(f"  Orders found: {data.get('orders_found', 0)}")
+                    formatted.append(f"  Items extracted: {data.get('items_extracted', 0)}")
+                    formatted.append(f"  Message: {data.get('message', 'Preferences learned')}")
+                
+                elif result["type"] == "shopping_preference":
+                    data = result["data"]
+                    item = data.get("item", "item")
+                    pref = data.get("preference")
+                    if pref:
+                        formatted.append(f"  Preference for '{item}': {pref.get('name', 'Unknown')}")
+                        formatted.append(f"    Ordered {pref.get('times_ordered', 0)} times before")
+                    else:
+                        formatted.append(f"  No preference found for '{item}'")
+                
+                elif result["type"] == "shopping_list":
+                    data = result["data"]
+                    formatted.append(data.get("formatted", "Shopping list built"))
+                
+                elif result["type"] == "order_history":
+                    orders = result["data"].get("orders", [])
+                    if orders:
+                        formatted.append(f"  Found {len(orders)} recent orders:")
+                        for order in orders[:5]:  # Show first 5
+                            formatted.append(f"  Order {order.get('order_id', 'Unknown')} on {order.get('date', 'Unknown')}:")
+                            for item in order.get("items", [])[:3]:
+                                formatted.append(f"    - {item.get('name', 'Unknown item')}")
+                    else:
+                        formatted.append("  No order history found. Try running 'learn shopping preferences' first.")
             else:
                 formatted.append(f"  Error: {result.get('error', 'Unknown error')}")
         

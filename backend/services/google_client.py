@@ -50,6 +50,19 @@ class GoogleClient:
         """Get auth headers, refreshing token if needed."""
         if not self.tokens.get("access_token"):
             self.tokens = self._load_tokens()
+        
+        # Try to make a simple request to check if token is valid
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+                headers={"Authorization": f"Bearer {self.tokens.get('access_token', '')}"}
+            )
+            if response.status_code == 401:
+                # Token expired, refresh it
+                refreshed = await self.refresh_token_if_needed()
+                if not refreshed:
+                    raise Exception("Failed to refresh OAuth token. Please reconnect Google.")
+        
         return {"Authorization": f"Bearer {self.tokens.get('access_token', '')}"}
     
     def is_connected(self):

@@ -111,6 +111,7 @@ User Message
 | `list_calendar_events` | List/search calendar | `date_range`, `search_term` |
 | `create_calendar_event` | Add calendar event | `title`, `date`, `start_time`, `end_time` |
 | `send_email` | Send email | `to`, `subject`, `body` |
+| `reply_to_email` | Reply to email thread | `thread_id`, `body` |
 
 ### Key Features
 
@@ -148,6 +149,9 @@ ai-lab/
 │   │   └── calendar.py         # Calendar list/create
 │   ├── services/
 │   │   └── google_client.py    # OAuth token management
+│   ├── storage/                # Persisted data
+│   │   ├── tokens.json         # OAuth tokens
+│   │   └── settings.json       # User settings
 │   └── .env                    # Secrets (GOOGLE_CLIENT_ID, OPENAI_API_KEY)
 ├── frontend/
 │   ├── index.html
@@ -190,3 +194,290 @@ OPENAI_API_KEY=sk-...
 | "Add dentist tomorrow at 3pm for an hour" | Creates calendar event |
 | "What's on my calendar this week?" | Lists upcoming events |
 | "Email john@test.com about the meeting tomorrow" | Creates event + sends invite |
+
+---
+
+## Data Architecture & Persistence
+
+### Current vs Planned Storage
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      PERSISTENT STORAGE                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  CURRENTLY IMPLEMENTED:                                          │
+│  ├── tokens.json        → OAuth tokens (survives restart)       │
+│  └── settings.json      → School name, teacher list             │
+│                                                                  │
+│  PLANNED (not yet implemented):                                  │
+│  ├── contacts.json      → Name → email mappings                 │
+│  ├── preferences.json   → Meeting duration, email style         │
+│  ├── facts.json         → User context (kids, timezone)         │
+│  └── history.json       → Conversation history                  │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### How Persistent Data Feeds Into the System
+
+| Data Type | Used By | Purpose | Example |
+|-----------|---------|---------|---------|
+| **Contacts** | Orchestrator | Skip "what's their email?" | `sarah → sarah@example.com` |
+| **Preferences** | Orchestrator | Default values for tools | `meeting_duration: 30min` |
+| **User Facts** | Conversation | Personalize responses | `2 kids: Emma (3rd), Liam (K)` |
+| **Chat History** | Conversation | Reference previous messages | `"like I mentioned earlier..."` |
+
+### Data Flow: Orchestrator vs Conversation Use
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        PROCESS FLOW                              │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  1. User: "email sarah about tomorrow's meeting"                │
+│                                                                  │
+│  2. _plan_action():                                             │
+│     ├── Load contacts.json          ◄── ORCHESTRATOR USE        │
+│     ├── Find: sarah → sarah@example.com                         │
+│     └── Plan: send_email(to="sarah@example.com", ...)           │
+│                                                                  │
+│  3. _execute_tool():                                            │
+│     ├── Load preferences.json       ◄── ORCHESTRATOR USE        │
+│     └── Use: email_style = "concise"                            │
+│                                                                  │
+│  4. Generate response:                                          │
+│     ├── Load facts.json             ◄── CONVERSATION USE        │
+│     ├── Load history.json (last 5 messages)                     │
+│     └── Inject into system prompt for personalization           │
+│                                                                  │
+│  5. LLM response personalized to user context                   │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Conversation Memory (Current Implementation)
+
+```python
+# In orchestrator_new.py - IN-MEMORY ONLY (lost on restart)
+conversation_memory = {
+    "pending_request": None,  # Stores incomplete request needing clarification
+    "last_context": None      # Stores last retrieved context for follow-ups
+}
+```
+
+**Example Flow:**
+1. User: "send email to sarah" → LLM returns `needs_clarification`
+2. System stores `pending_request = {"original_prompt": "send email to sarah"}`
+3. System asks: "What is Sarah's email address?"
+4. User: "sarah@example.com"
+5. System detects email, merges: "send email to sarah to sarah@example.com"
+6. Executes send_email tool
+
+### Future Enhancements
+
+| Feature | Storage | Benefit |
+|---------|---------|---------|
+| **Contacts Memory** | `contacts.json` | No more "what's their email?" |
+| **Chat History** | `history.json` | Enables "like I said before" references |
+| **User Facts** | `facts.json` | Personalized responses (kids' names, school) |
+| **Learning Preferences** | `preferences.json` | Remember meeting length, email style |
+
+---
+
+## GCP Deployment Architecture
+
+### Production Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              GOOGLE CLOUD                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌─────────────────┐         ┌─────────────────────────────────────────┐   │
+│  │   Cloud CDN     │         │           Cloud Run                     │   │
+│  │   (Frontend)    │         │         (Backend API)                   │   │
+│  │                 │         │                                         │   │
+│  │  - index.html   │ ──────► │  - FastAPI app                         │   │
+│  │  - app.js       │   HTTPS │  - Agent orchestrator                  │   │
+│  │  - styles.css   │         │  - SSE streaming                       │   │
+│  │                 │         │                                         │   │
+│  │  Cloud Storage  │         │  Container: python:3.11-slim           │   │
+│  │  (static files) │         │  Memory: 512MB-1GB                     │   │
+│  │                 │         │  CPU: 1                                │   │
+│  └─────────────────┘         └─────────────────────────────────────────┘   │
+│                                        │                                    │
+│                                        │                                    │
+│          ┌─────────────────────────────┼─────────────────────────────┐     │
+│          ▼                             ▼                             ▼     │
+│  ┌───────────────┐         ┌───────────────────┐         ┌──────────────┐ │
+│  │ Secret Manager│         │     Firestore     │         │  Cloud       │ │
+│  │               │         │   (User Data)     │         │  Logging     │ │
+│  │ - OPENAI_KEY  │         │                   │         │              │ │
+│  │ - GOOGLE_     │         │ users/{uid}/      │         │ - Requests   │ │
+│  │   CLIENT_ID   │         │   ├── tokens      │         │ - Errors     │ │
+│  │ - GOOGLE_     │         │   ├── settings    │         │ - Agent logs │ │
+│  │   CLIENT_     │         │   ├── contacts    │         │              │ │
+│  │   SECRET      │         │   └── preferences │         │              │ │
+│  └───────────────┘         └───────────────────┘         └──────────────┘ │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+                    ┌─────────────────────────────────┐
+                    │         External APIs           │
+                    │  - Google Gmail API             │
+                    │  - Google Calendar API          │
+                    │  - OpenAI API                   │
+                    └─────────────────────────────────┘
+```
+
+### Secure OAuth Flow (Production)
+
+```
+┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
+│  User    │     │ Frontend │     │ Backend  │     │ Google   │
+│ Browser  │     │ (CDN)    │     │(CloudRun)│     │  OAuth   │
+└────┬─────┘     └────┬─────┘     └────┬─────┘     └────┬─────┘
+     │                │                │                │
+     │ 1. Click       │                │                │
+     │    "Connect    │                │                │
+     │     Google"    │                │                │
+     │───────────────►│                │                │
+     │                │                │                │
+     │                │ 2. Redirect to │                │
+     │                │    /auth/login │                │
+     │                │───────────────►│                │
+     │                │                │                │
+     │◄───────────────┼────────────────│ 3. Redirect   │
+     │         302 to Google OAuth     │    to Google  │
+     │                │                │───────────────►│
+     │                │                │                │
+     │─────────────────────────────────────────────────►│
+     │                    4. User authorizes            │
+     │◄─────────────────────────────────────────────────│
+     │         5. Redirect to /auth/callback?code=xxx   │
+     │                │                │                │
+     │───────────────────────────────►│                │
+     │                │                │ 6. Exchange   │
+     │                │                │    code for   │
+     │                │                │    tokens     │
+     │                │                │───────────────►│
+     │                │                │◄───────────────│
+     │                │                │  access_token │
+     │                │                │  refresh_token│
+     │                │                │                │
+     │                │                │ 7. Store in   │
+     │                │                │    Firestore  │
+     │                │                │    (encrypted)│
+     │                │                │                │
+     │◄───────────────┼────────────────│ 8. Redirect  │
+     │         Redirect to frontend    │    to app     │
+     │                │                │                │
+```
+
+### Security Design
+
+#### Token Storage (Firestore)
+
+```
+firestore/
+└── users/
+    └── {user_id}/
+        ├── tokens (subcollection)
+        │   └── google
+        │       ├── access_token: "ya29.xxx" (encrypted)
+        │       ├── refresh_token: "1//xxx" (encrypted)
+        │       ├── expires_at: timestamp
+        │       └── updated_at: timestamp
+        │
+        ├── settings
+        │   ├── school_name: "xyz Elementary"
+        │   └── teacher_names: ["Mrs. Smith"]
+        │
+        └── contacts
+            ├── sarah: "sarah@example.com"
+            └── jay: "junaid@example.com"
+```
+
+#### Secrets Management
+
+```yaml
+# Secrets in Google Secret Manager (NOT in code or env vars)
+secrets:
+  - OPENAI_API_KEY
+  - GOOGLE_CLIENT_ID  
+  - GOOGLE_CLIENT_SECRET
+  - ENCRYPTION_KEY  # For encrypting tokens in Firestore
+```
+
+### Cloud Run Configuration
+
+```yaml
+# service.yaml
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: ai-assistant-backend
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "10"
+    spec:
+      containerConcurrency: 80
+      timeoutSeconds: 300  # 5 min for long LLM calls
+      containers:
+        - image: gcr.io/PROJECT_ID/ai-assistant:latest
+          ports:
+            - containerPort: 8000
+          resources:
+            limits:
+              memory: 1Gi
+              cpu: "1"
+          env:
+            - name: GOOGLE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: google-client-id
+                  key: latest
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openai-api-key
+                  key: latest
+```
+
+### Deployment Commands
+
+```bash
+# 1. Build and push container
+gcloud builds submit --tag gcr.io/PROJECT_ID/ai-assistant
+
+# 2. Deploy to Cloud Run
+gcloud run deploy ai-assistant-backend \
+  --image gcr.io/PROJECT_ID/ai-assistant \
+  --platform managed \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --set-secrets="OPENAI_API_KEY=openai-api-key:latest,GOOGLE_CLIENT_ID=google-client-id:latest,GOOGLE_CLIENT_SECRET=google-client-secret:latest"
+
+# 3. Deploy frontend to Cloud Storage + CDN
+gsutil -m cp -r frontend/* gs://BUCKET_NAME/
+gcloud compute backend-buckets create frontend-bucket --gcs-bucket-name=BUCKET_NAME
+```
+
+
+### Security Checklist
+
+- [ ] OAuth tokens encrypted in Firestore (not plain text)
+- [ ] Secrets in Secret Manager (not environment variables in code)
+- [ ] HTTPS only (Cloud Run default)
+- [ ] CORS restricted to frontend domain only
+- [ ] Token refresh handled server-side
+- [ ] User data scoped by user ID (no cross-user access)
+- [ ] Rate limiting on /chat endpoint
+- [ ] Input validation on all endpoints
+- [ ] Audit logging enabled
+- [ ] OAuth consent screen in production mode (not test)
