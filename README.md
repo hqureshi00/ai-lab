@@ -174,7 +174,7 @@ OPENAI_API_KEY=sk-...
 
 ---
 
-## Google OAuth Setup
+## Google OAuth Setup (for local run)
 
 1. Go to [Google Cloud Console](https://console.cloud.google.com)
 2. Create OAuth 2.0 credentials (Web application)
